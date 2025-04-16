@@ -1,0 +1,44 @@
+From fb278cc663e336f369a9dd17bf920108151c62cc Mon Sep 17 00:00:00 2001
+From: Torge Matthies <openglfreak@googlemail.com>
+Date: Wed, 31 Jan 2024 17:42:55 +0100
+Subject: [PATCH 16/52] winegstreamer: Set base time on wg_parser bin while
+ connecting.
+
+CW-Bug-Id: #21644
+---
+ dlls/winegstreamer/wg_parser.c | 5 ++++-
+ 1 file changed, 4 insertions(+), 1 deletion(-)
+
+diff --git a/dlls/winegstreamer/wg_parser.c b/dlls/winegstreamer/wg_parser.c
+index 60979c60401..607d4160b65 100644
+--- a/dlls/winegstreamer/wg_parser.c
++++ b/dlls/winegstreamer/wg_parser.c
+@@ -2029,6 +2029,7 @@ static NTSTATUS wg_parser_connect(void *args)
+     const struct wg_parser_connect_params *params = args;
+     struct wg_parser *parser = get_parser(params->parser);
+     const WCHAR *uri = params->uri;
++    GstClock *clock;
+     unsigned int i;
+     int ret;
+ 
+@@ -2065,7 +2066,8 @@ static NTSTATUS wg_parser_connect(void *args)
+     gst_pad_set_event_function(parser->my_src, src_event_cb);
+     gst_pad_set_element_private(parser->my_src, parser);
+ 
+-    gst_element_set_clock(parser->container, gst_system_clock_obtain());
++    clock = gst_system_clock_obtain();
++    gst_element_set_clock(parser->container, clock);
+ 
+     parser->start_offset = parser->next_offset = parser->stop_offset = 0;
+     parser->next_pull_offset = 0;
+@@ -2074,6 +2076,7 @@ static NTSTATUS wg_parser_connect(void *args)
+     if (!parser->init_gst(parser))
+         goto out;
+ 
++    gst_element_set_base_time(parser->container, gst_clock_get_time(clock));
+     gst_element_set_state(parser->container, GST_STATE_PAUSED);
+     ret = gst_element_get_state(parser->container, NULL, NULL, -1);
+ 
+-- 
+2.47.2
+

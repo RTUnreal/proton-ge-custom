@@ -1,0 +1,27 @@
+From ce68579a02d832b35454e101380c88a80bf043ca Mon Sep 17 00:00:00 2001
+From: Torge Matthies <openglfreak@googlemail.com>
+Date: Mon, 26 Aug 2024 16:15:16 +0200
+Subject: [PATCH 08/52] quartz: Fix buffer overflow when passing url as
+ filename to FilterGraph2_AddSourceFilter.
+
+CW-Bug-Id: #21644
+---
+ dlls/quartz/filesource.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/dlls/quartz/filesource.c b/dlls/quartz/filesource.c
+index 7d6292df579..9d823662427 100644
+--- a/dlls/quartz/filesource.c
++++ b/dlls/quartz/filesource.c
+@@ -191,7 +191,7 @@ BOOL get_media_type(const WCHAR *filename, GUID *majortype, GUID *subtype, GUID
+         WCHAR guidstr[39];
+         HKEY key;
+ 
+-        wcscat(extensions_path, ext);
++        wcsncat(extensions_path, ext, ARRAY_SIZE(extensions_path));
+         if (!RegOpenKeyExW(HKEY_CLASSES_ROOT, extensions_path, 0, KEY_READ, &key))
+         {
+             size = sizeof(guidstr);
+-- 
+2.47.2
+

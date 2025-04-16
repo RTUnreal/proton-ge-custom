@@ -1,0 +1,52 @@
+From c884c5d71e8713974c51cb64304c27ebdf718f06 Mon Sep 17 00:00:00 2001
+From: Torge Matthies <openglfreak@googlemail.com>
+Date: Thu, 25 Jul 2024 00:17:20 +0200
+Subject: [PATCH 51/52] [HACK] kernelbase: Replace stderr of yt-dlp process.
+
+---
+ dlls/kernelbase/process.c | 22 ++++++++++++++++++++++
+ 1 file changed, 22 insertions(+)
+
+diff --git a/dlls/kernelbase/process.c b/dlls/kernelbase/process.c
+index a8cb9fb31b6..c95b1c785a4 100644
+--- a/dlls/kernelbase/process.c
++++ b/dlls/kernelbase/process.c
+@@ -555,6 +555,25 @@ static BOOL product_name_matches(const WCHAR *app_name, const char *match)
+     return TRUE;
+ }
+ 
++static BOOL is_ytdlp( const WCHAR *app_name )
++{
++    static const WCHAR ytdlp_exeW[] = L"yt-dlp.exe";
++    static const size_t ytdlp_exeW_len = ARRAY_SIZE(ytdlp_exeW) - 1;
++    size_t len;
++
++    if (!app_name)
++        return FALSE;
++
++    len = wcslen( app_name );
++    if (len < ytdlp_exeW_len + 1)
++        return FALSE;
++    if (app_name[len - ytdlp_exeW_len - 1] != '\\' && app_name[len - ytdlp_exeW_len - 1] != '/')
++        return FALSE;
++    if (wcscmp( app_name + (len - ytdlp_exeW_len), ytdlp_exeW ))
++        return FALSE;
++    return TRUE;
++}
++
+ static int battleye_launcher_redirect_hack( const WCHAR *app_name, WCHAR *new_name, DWORD new_name_len,
+                                             WCHAR **orig_app_name )
+ {
+@@ -727,6 +746,9 @@ BOOL WINAPI DECLSPEC_HOTPATCH CreateProcessInternalW( HANDLE token, const WCHAR
+     if (battleye_launcher_redirect_hack( app_name, name, ARRAY_SIZE(name), &orig_app_name ))
+         app_name = name;
+ 
++    if (is_ytdlp( app_name ))
++        startup_info->hStdError = INVALID_HANDLE_VALUE;
++
+     /* Warn if unsupported features are used */
+ 
+     if (flags & (IDLE_PRIORITY_CLASS | HIGH_PRIORITY_CLASS | REALTIME_PRIORITY_CLASS |
+-- 
+2.47.2
+

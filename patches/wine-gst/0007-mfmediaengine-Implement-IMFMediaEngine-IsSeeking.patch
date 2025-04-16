@@ -1,0 +1,35 @@
+From bddec4fbf253c0380aeacad4c22b8fbd84870d22 Mon Sep 17 00:00:00 2001
+From: Torge Matthies <openglfreak@googlemail.com>
+Date: Fri, 14 Jun 2024 03:09:34 +0200
+Subject: [PATCH 07/52] mfmediaengine: Implement IMFMediaEngine::IsSeeking.
+
+---
+ dlls/mfmediaengine/main.c | 11 +++++++++--
+ 1 file changed, 9 insertions(+), 2 deletions(-)
+
+diff --git a/dlls/mfmediaengine/main.c b/dlls/mfmediaengine/main.c
+index d6d6b2fd7ab..cd68c122851 100644
+--- a/dlls/mfmediaengine/main.c
++++ b/dlls/mfmediaengine/main.c
+@@ -1796,9 +1796,16 @@ static USHORT WINAPI media_engine_GetReadyState(IMFMediaEngineEx *iface)
+ 
+ static BOOL WINAPI media_engine_IsSeeking(IMFMediaEngineEx *iface)
+ {
+-    FIXME("(%p): stub.\n", iface);
++    struct media_engine *engine = impl_from_IMFMediaEngineEx(iface);
++    BOOL ret;
+ 
+-    return FALSE;
++    TRACE("%p.\n", iface);
++
++    EnterCriticalSection(&engine->cs);
++    ret = !!(engine->flags & FLAGS_ENGINE_SEEKING);
++    LeaveCriticalSection(&engine->cs);
++
++    return ret;
+ }
+ 
+ static double WINAPI media_engine_GetCurrentTime(IMFMediaEngineEx *iface)
+-- 
+2.47.2
+

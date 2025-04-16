@@ -1,0 +1,228 @@
+From e923f5a4224af71b44f051d536464a4edf5bc8e6 Mon Sep 17 00:00:00 2001
+From: Torge Matthies <openglfreak@googlemail.com>
+Date: Sun, 14 Apr 2024 06:12:55 +0200
+Subject: [PATCH 25/52] winegstreamer: Do not seek live sources.
+
+Implementing MFMEDIASOURCE_CAN_SEEK makes the higher level components also ignore the seek.
+
+souphttpsrc seems to break from seeking sometimes:
+
+    winegstreamer error: source: Server does not support seeking.
+    winegstreamer error: source: ../src-gst_good/ext/soup/gstsouphttpsrc.c(1948): gst_soup_http_src_do_request (): /GstBin:bin1/GstURIDecodeBin:uridecodebin1/GstSoupHTTPSrc:source:
+    Server does not accept Range HTTP header, URL: https://stream.vrcdn.live/live/djzombiepunk.live.ts, Redirect to: (NULL)
+
+Seeking a live source doesn't make sense anyway.
+
+CW-Bug-Id: #21644
+---
+ dlls/winegstreamer/gst_private.h  |  2 ++
+ dlls/winegstreamer/main.c         | 13 ++++++++
+ dlls/winegstreamer/media_source.c |  6 +++-
+ dlls/winegstreamer/unixlib.h      |  8 +++++
+ dlls/winegstreamer/wg_parser.c    | 54 ++++++++++++++++++++++++++++++-
+ 5 files changed, 81 insertions(+), 2 deletions(-)
+
+diff --git a/dlls/winegstreamer/gst_private.h b/dlls/winegstreamer/gst_private.h
+index adefeaba15c..383c479c083 100644
+--- a/dlls/winegstreamer/gst_private.h
++++ b/dlls/winegstreamer/gst_private.h
+@@ -82,6 +82,8 @@ void wg_parser_push_data(wg_parser_t parser, const void *data, uint32_t size);
+ uint32_t wg_parser_get_stream_count(wg_parser_t parser);
+ wg_parser_stream_t wg_parser_get_stream(wg_parser_t parser, uint32_t index);
+ 
++BOOL wg_parser_is_seekable(wg_parser_t parser);
++
+ void wg_parser_stream_get_current_format(wg_parser_stream_t stream, struct wg_format *format);
+ HRESULT wg_parser_stream_get_current_type_mf(wg_parser_stream_t stream, IMFMediaType **media_type);
+ void wg_parser_stream_get_codec_format(wg_parser_stream_t stream, struct wg_format *format);
+diff --git a/dlls/winegstreamer/main.c b/dlls/winegstreamer/main.c
+index 374924a3e6a..5e57e9d0b7f 100644
+--- a/dlls/winegstreamer/main.c
++++ b/dlls/winegstreamer/main.c
+@@ -273,6 +273,19 @@ wg_parser_stream_t wg_parser_get_stream(wg_parser_t parser, uint32_t index)
+     return params.stream;
+ }
+ 
++BOOL wg_parser_is_seekable(wg_parser_t parser)
++{
++    struct wg_parser_is_seekable_params params =
++    {
++        .parser = parser,
++    };
++
++    TRACE("parser %#I64x.\n", parser);
++
++    WINE_UNIX_CALL(unix_wg_parser_is_seekable, &params);
++    return params.seekable;
++}
++
+ static HRESULT wg_get_media_type_mf(enum unix_funcs unix_func, void *params,
+         struct wg_media_type *wg_media_type, IMFMediaType **media_type)
+ {
+diff --git a/dlls/winegstreamer/media_source.c b/dlls/winegstreamer/media_source.c
+index 351714b0d9e..feb2a9fa018 100644
+--- a/dlls/winegstreamer/media_source.c
++++ b/dlls/winegstreamer/media_source.c
+@@ -1419,7 +1419,11 @@ static HRESULT WINAPI media_source_GetCharacteristics(IMFMediaSource *iface, DWO
+     if (source->state == SOURCE_SHUTDOWN)
+         hr = MF_E_SHUTDOWN;
+     else
+-        *characteristics = MFMEDIASOURCE_CAN_SEEK | MFMEDIASOURCE_CAN_PAUSE;
++    {
++        *characteristics = MFMEDIASOURCE_CAN_PAUSE;
++        if (!source->wg_parser || wg_parser_is_seekable(source->wg_parser))
++            *characteristics |= MFMEDIASOURCE_CAN_SEEK;
++    }
+ 
+     LeaveCriticalSection(&source->cs);
+ 
+diff --git a/dlls/winegstreamer/unixlib.h b/dlls/winegstreamer/unixlib.h
+index f9b87e51b93..88448714bff 100644
+--- a/dlls/winegstreamer/unixlib.h
++++ b/dlls/winegstreamer/unixlib.h
+@@ -270,6 +270,12 @@ struct wg_parser_get_stream_params
+     wg_parser_stream_t stream;
+ };
+ 
++struct wg_parser_is_seekable_params
++{
++    wg_parser_t parser;
++    BOOL seekable;
++};
++
+ struct wg_parser_stream_get_current_type_params
+ {
+     wg_parser_stream_t stream;
+@@ -527,6 +533,8 @@ enum unix_funcs
+     unix_wg_parser_get_stream_count,
+     unix_wg_parser_get_stream,
+ 
++    unix_wg_parser_is_seekable,
++
+     unix_wg_parser_stream_get_current_type,
+     unix_wg_parser_stream_get_current_format,
+     unix_wg_parser_stream_get_codec_format,
+diff --git a/dlls/winegstreamer/wg_parser.c b/dlls/winegstreamer/wg_parser.c
+index d91f7ca1d14..096a79d1a77 100644
+--- a/dlls/winegstreamer/wg_parser.c
++++ b/dlls/winegstreamer/wg_parser.c
+@@ -110,6 +110,8 @@ struct wg_parser
+     bool use_mediaconv;
+     bool use_opengl;
+     GstContext *context;
++
++    bool is_seekable;
+ };
+ static const unsigned int input_cache_chunk_size = 512 << 10;
+ 
+@@ -176,6 +178,15 @@ static NTSTATUS wg_parser_get_stream(void *args)
+     return S_OK;
+ }
+ 
++static NTSTATUS wg_parser_is_seekable(void *args)
++{
++    struct wg_parser_is_seekable_params *params = args;
++    struct wg_parser *parser = get_parser(params->parser);
++
++    params->seekable = parser->is_seekable;
++    return S_OK;
++}
++
+ static NTSTATUS wg_parser_get_next_read_offset(void *args)
+ {
+     struct wg_parser_get_next_read_offset_params *params = args;
+@@ -715,6 +726,9 @@ static NTSTATUS wg_parser_stream_seek(void *args)
+ 
+     stream = get_stream(params->stream);
+ 
++    if (!stream->parser->is_seekable)
++        return S_OK;
++
+     if (start_flags & AM_SEEKING_SeekToKeyFrame)
+         flags |= GST_SEEK_FLAG_KEY_UNIT;
+     if (start_flags & AM_SEEKING_Segment)
+@@ -2177,6 +2191,7 @@ static NTSTATUS wg_parser_connect(void *args)
+     parser->start_offset = parser->next_offset = parser->stop_offset = 0;
+     parser->next_pull_offset = 0;
+     parser->error = false;
++    parser->is_seekable = true;
+ 
+     if (!parser->init_gst(parser))
+         goto out;
+@@ -2196,6 +2211,11 @@ static NTSTATUS wg_parser_connect(void *args)
+             GST_ERROR("Failed to play stream.");
+         goto out;
+     }
++    else if (ret == GST_STATE_CHANGE_NO_PREROLL && parser->uri)
++    {
++        GST_DEBUG("Stream does not preroll.");
++        parser->is_seekable = false;
++    }
+ 
+     pthread_mutex_lock(&parser->mutex);
+ 
+@@ -2217,6 +2237,24 @@ static NTSTATUS wg_parser_connect(void *args)
+         goto out;
+     }
+ 
++    if (parser->stream_count && parser->is_seekable)
++    {
++        GstQuery *query = gst_query_new_seeking(GST_FORMAT_TIME);
++        gboolean seekable = false;
++
++        if (query)
++        {
++            if (gst_pad_peer_query(parser->streams[0]->my_sink, query))
++                gst_query_parse_seeking(query, NULL, &seekable, NULL, NULL);
++            gst_query_unref(query);
++        }
++        if (!seekable)
++        {
++            GST_DEBUG("Stream is not seekable.");
++            parser->is_seekable = false;
++        }
++    }
++
+     for (i = 0; i < parser->stream_count; ++i)
+     {
+         struct wg_parser_stream *stream = parser->streams[i];
+@@ -2259,7 +2297,17 @@ static NTSTATUS wg_parser_connect(void *args)
+             }
+             if (gst_pad_peer_query_duration(stream->my_sink, GST_FORMAT_TIME, &duration))
+             {
+-                stream->duration = duration == -1 ? (uint64_t)-1 : duration / 100;
++                if (duration == -1)
++                {
++                    if (parser->uri)
++                    {
++                        GST_DEBUG("Stream has no duration.");
++                        parser->is_seekable = false;
++                    }
++                    stream->duration = (uint64_t)-1;
++                }
++                else
++                    stream->duration = duration / 100;
+                 break;
+             }
+ 
+@@ -2586,6 +2634,8 @@ const unixlib_entry_t __wine_unix_call_funcs[] =
+     X(wg_parser_get_stream_count),
+     X(wg_parser_get_stream),
+ 
++    X(wg_parser_is_seekable),
++
+     X(wg_parser_stream_get_current_format),
+     X(wg_parser_stream_get_current_type),
+     X(wg_parser_stream_get_codec_format),
+@@ -3152,6 +3202,8 @@ const unixlib_entry_t __wine_unix_call_wow64_funcs[] =
+     X(wg_parser_get_stream_count),
+     X(wg_parser_get_stream),
+ 
++    X(wg_parser_is_seekable),
++
+     X64(wg_parser_stream_get_current_format),
+     X64(wg_parser_stream_get_current_type),
+     X64(wg_parser_stream_get_codec_format),
+-- 
+2.47.2
+

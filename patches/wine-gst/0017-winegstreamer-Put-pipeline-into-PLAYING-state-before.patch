@@ -1,0 +1,48 @@
+From aadbe7b2f32dfb592d9b69c52c5312b9e3d850d8 Mon Sep 17 00:00:00 2001
+From: Torge Matthies <openglfreak@googlemail.com>
+Date: Wed, 31 Jan 2024 17:42:55 +0100
+Subject: [PATCH 17/52] winegstreamer: Put pipeline into PLAYING state before
+ waiting for the no-more-pads callback.
+
+Some elements (e.g. uridecodebin with an RTSP URI) won't send no-more-pads in READY/PAUSED state.
+
+CW-Bug-Id: #21644
+---
+ dlls/winegstreamer/wg_parser.c | 14 +++++++++++---
+ 1 file changed, 11 insertions(+), 3 deletions(-)
+
+diff --git a/dlls/winegstreamer/wg_parser.c b/dlls/winegstreamer/wg_parser.c
+index 607d4160b65..5e953b084cd 100644
+--- a/dlls/winegstreamer/wg_parser.c
++++ b/dlls/winegstreamer/wg_parser.c
+@@ -2077,9 +2077,9 @@ static NTSTATUS wg_parser_connect(void *args)
+         goto out;
+ 
+     gst_element_set_base_time(parser->container, gst_clock_get_time(clock));
+-    gst_element_set_state(parser->container, GST_STATE_PAUSED);
+-    ret = gst_element_get_state(parser->container, NULL, NULL, -1);
+-
++    ret = gst_element_set_state(parser->container, GST_STATE_PAUSED);
++    if (ret == GST_STATE_CHANGE_ASYNC)
++        ret = gst_element_get_state(parser->container, NULL, NULL, -1);
+     if (ret == GST_STATE_CHANGE_FAILURE)
+     {
+         if (!parser->use_mediaconv && parser->init_gst == decodebin_parser_init_gst)
+@@ -2094,6 +2094,14 @@ static NTSTATUS wg_parser_connect(void *args)
+ 
+     pthread_mutex_lock(&parser->mutex);
+ 
++    if (ret == GST_STATE_CHANGE_NO_PREROLL)
++    {
++        ret = gst_element_set_state(parser->container, GST_STATE_PLAYING);
++        if (ret == GST_STATE_CHANGE_ASYNC)
++            ret = gst_element_get_state(parser->container, NULL, NULL, -1);
++        if (ret == GST_STATE_CHANGE_FAILURE)
++            goto out;
++    }
+     while (!parser_no_more_pads(parser) && !parser->error)
+         pthread_cond_wait(&parser->init_cond, &parser->mutex);
+     if (parser->error)
+-- 
+2.47.2
+
